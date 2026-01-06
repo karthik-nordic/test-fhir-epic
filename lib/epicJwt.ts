@@ -16,6 +16,9 @@ export const generateClientAssertion = (): string => {
 
   return jwt.sign(payload, privateKey, {
     algorithm: "RS256",
-    header: { kid: epicConfig.keyId }
+    header: {
+      alg: "RS256",
+      kid: epicConfig.keyId
+    }
   });
 };
