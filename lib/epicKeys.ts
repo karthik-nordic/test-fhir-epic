@@ -5,6 +5,12 @@ import { epicConfig } from "@/config/epic.config";
 const isLocal = process.env.EPIC_KEY_MODE === "local";
 
 /* -------------------------------------------------
+   Helpers
+------------------------------------------------- */
+const normalizePem = (pem: string): string =>
+  pem.replace(/\r\n/g, "\n").trim() + "\n";
+
+/* -------------------------------------------------
    LOCAL MODE: generate + persist keys
 ------------------------------------------------- */
 const ensureLocalKeyPair = () => {
@@ -23,14 +29,17 @@ const ensureLocalKeyPair = () => {
     privateKeyEncoding: { type: "pkcs8", format: "pem" }
   });
 
-  fs.writeFileSync(epicConfig.privateKeyPath, privateKey);
-  fs.writeFileSync(epicConfig.publicKeyPath, publicKey);
+  const cleanPrivatePem = normalizePem(privateKey);
+  const cleanPublicPem = normalizePem(publicKey);
 
-  /* ---------- Base64 output for Vercel ---------- */
-  const privateB64 = Buffer.from(privateKey).toString("base64");
-  const publicB64 = Buffer.from(publicKey).toString("base64");
+  fs.writeFileSync(epicConfig.privateKeyPath, cleanPrivatePem);
+  fs.writeFileSync(epicConfig.publicKeyPath, cleanPublicPem);
 
-  console.log("\n📦 Base64 keys (copy to Vercel env vars)");
+  /* ---------- Base64 output for env vars ---------- */
+  const privateB64 = Buffer.from(cleanPrivatePem, "utf8").toString("base64");
+  const publicB64 = Buffer.from(cleanPublicPem, "utf8").toString("base64");
+
+  console.log("\n📦 Base64 keys (copy to env vars)");
   console.log("EPIC_PRIVATE_KEY_BASE64=");
   console.log(privateB64);
   console.log("\nEPIC_PUBLIC_KEY_BASE64=");
@@ -41,10 +50,19 @@ const ensureLocalKeyPair = () => {
 /* -------------------------------------------------
    PRIVATE KEY
 ------------------------------------------------- */
-export const getPrivateKey = (): Buffer => {
+export const getPrivateKey = (): crypto.KeyObject => {
   if (isLocal) {
     ensureLocalKeyPair();
-    return fs.readFileSync(epicConfig.privateKeyPath);
+
+    const pem = normalizePem(
+      fs.readFileSync(epicConfig.privateKeyPath, "utf8")
+    );
+
+    return crypto.createPrivateKey({
+      key: pem,
+      format: "pem",
+      type: "pkcs8"
+    });
   }
 
   const b64 = process.env.EPIC_PRIVATE_KEY_BASE64;
@@ -52,7 +70,13 @@ export const getPrivateKey = (): Buffer => {
     throw new Error("EPIC_PRIVATE_KEY_BASE64 missing (env mode)");
   }
 
-  return Buffer.from(b64, "base64");
+  const pem = normalizePem(Buffer.from(b64, "base64").toString("utf8"));
+
+  return crypto.createPrivateKey({
+    key: pem,
+    format: "pem",
+    type: "pkcs8"
+  });
 };
 
 /* -------------------------------------------------
@@ -72,7 +96,15 @@ export const getJWKS = () => {
     publicKeyPem = Buffer.from(b64, "base64").toString("utf8");
   }
 
-  const jwk = crypto.createPublicKey(publicKeyPem).export({ format: "jwk" });
+  publicKeyPem = normalizePem(publicKeyPem);
+
+  const jwk = crypto
+    .createPublicKey({
+      key: publicKeyPem,
+      format: "pem",
+      type: "spki"
+    })
+    .export({ format: "jwk" });
 
   return {
     keys: [
@@ -85,3 +117,15 @@ export const getJWKS = () => {
     ]
   };
 };
+
+/* -------------------------------------------------
+   Startup sanity check (recommended)
+------------------------------------------------- */
+try {
+  getPrivateKey();
+  console.log("✅ RSA private key validated successfully");
+} catch (err) {
+  console.error("❌ RSA private key validation failed", err);
+  process.exit(1);
+}
+
